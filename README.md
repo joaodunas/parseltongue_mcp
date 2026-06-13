@@ -1,8 +1,25 @@
 # Parseltongue MCP Server 🐍
 
-A Model Context Protocol (MCP) server providing 40+ text encoding, cipher, and transformation tools inspired by [P4RS3LT0NGV3](https://github.com/elder-plinius/P4RS3LT0NGV3).
+A Model Context Protocol (MCP) server providing direct text encoding tools plus a consumer bridge for the current [P4RS3LT0NGV3](https://ph1r3574r73r.github.io/P4RS3LT0NGV3/) transform catalog.
 
 ## Features
+
+### 🧬 P4RS3LT0NGV3 Consumer Bridge
+
+- **list_p4rs_transforms**: Discover transforms from the local `P4RS3LT0NGV3/src/transformers` tree.
+- **apply_p4rs_transform**: Apply any discovered P4RS transform by id or display name.
+- **decode_p4rs_transform**: Decode/reverse any discovered reversible transform.
+- Set `P4RS3LT0NGV3_PATH` if the repo is not at `~/git/P4RS3LT0NGV3`.
+
+### 🔤 Custom Spelling Alphabets
+
+- **encode_spelling_alphabet**: Encode text with a custom ICAO-style A-Z alphabet JSON map.
+- **decode_spelling_alphabet**: Decode spelling-alphabet text back to letters.
+
+### 🔳 QR Codes & Barcodes
+
+- **generate_qr_code_svg** and **generate_qr_code_data_uri** for QR code generation.
+- **generate_barcode_svg** for Code 128, Code 39, and EAN-13 SVG generation.
 
 ### 📦 Basic Encodings (22 tools)
 
@@ -191,6 +208,9 @@ All tools are exposed as MCP tools with detailed descriptions and type hints:
 | Unicode Transformations | 6     | Zalgo, Upside Down, Bubble, Full Width, Strikethrough, Underline |
 | Steganography           | 3     | Zero-Width, Invisible Ink                                        |
 | Utilities               | 2     | Reverse, Pig Latin                                               |
+| P4RS Bridge             | 3     | List/apply/decode transforms from the P4RS3LT0NGV3 transformer tree |
+| Spelling Alphabet       | 2     | Encode/decode custom alphabets                                   |
+| Codes                   | 3     | Generate QR codes and barcodes                                   |
 
 ## Development
 
@@ -212,10 +232,12 @@ npx @modelcontextprotocol/inspector uv run python main.py
 - **Dependencies**:
   - `mcp[cli]>=1.16.0` - MCP server framework
   - `httpx>=0.28.1` - HTTP client (for potential future features)
+  - `qrcode[pil]>=8.0` and `pillow>=10.0.0` - QR PNG/SVG generation
+  - `python-barcode>=0.15.1` - Code 128, Code 39, and EAN-13 SVG generation
 
 ## Credits
 
-Inspired by [P4RS3LT0NGV3](https://github.com/elder-plinius/P4RS3LT0NGV3) by elder-plinius.
+Inspired by [P4RS3LT0NGV3](https://ph1r3574r73r.github.io/P4RS3LT0NGV3/).
 
 ## License
 
@@ -223,13 +245,12 @@ Open source. See LICENSE file for details.
 
 ## Contributing
 
-Contributions welcome! Areas to expand:
+Contributions welcome. Useful areas to expand:
 
-- More cipher algorithms (Vigenère, Rail Fence, Playfair)
-- Fantasy language encodings (Elvish, Klingon, etc.)
-- Ancient scripts (Runes, Hieroglyphics)
-- Additional Unicode styles
-- Batch encoding/decoding operations
+- Native wrappers for high-use P4RS bridge transforms.
+- QR/barcode image decoding parity with the browser app.
+- More structured batch transform chains.
+- Better diagnostics when the local P4RS checkout is stale relative to the hosted app.
 
 ## Examples in Action
 

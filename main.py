@@ -10,11 +10,149 @@ import base45
 import binascii
 import urllib.parse
 import html
+import json
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP server
 mcp = FastMCP("parseltongue")
+
+P4RS_DEFAULT_PATHS = [
+    Path(os.environ.get("P4RS3LT0NGV3_PATH", "")).expanduser(),
+    Path.home() / "git" / "P4RS3LT0NGV3-current",
+    Path.home() / "git" / "P4RS3LT0NGV3",
+]
+
+
+def _p4rs_root() -> Path:
+    for root in P4RS_DEFAULT_PATHS:
+        if root and (root / "src" / "transformers" / "loader-node.js").exists():
+            return root
+    raise FileNotFoundError(
+        "P4RS3LT0NGV3 transformer source not found. Set P4RS3LT0NGV3_PATH to the repo root."
+    )
+
+
+def _run_p4rs_bridge(action: str, payload: dict[str, Any]) -> Any:
+    root = _p4rs_root()
+    bridge = root / "src" / "transformers" / "loader-node.js"
+    script = r"""
+const transforms = require(process.argv[1]);
+const action = process.argv[2];
+const payload = JSON.parse(process.argv[3] || "{}");
+const fs = require("fs");
+const path = require("path");
+const transformersRoot = path.dirname(process.argv[1]);
+
+function categoryMap() {
+  const result = {};
+  for (const dirent of fs.readdirSync(transformersRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) continue;
+    const category = dirent.name;
+    const categoryPath = path.join(transformersRoot, category);
+    for (const file of fs.readdirSync(categoryPath)) {
+      if (!file.endsWith(".js")) continue;
+      const id = file.replace(/\.js$/, "").replace(/-/g, "_");
+      result[id] = category;
+    }
+  }
+  return result;
+}
+
+const categories = categoryMap();
+
+function summarize(key, transform) {
+  return {
+    id: key,
+    name: transform.name || key,
+    category: transform.category || categories[key] || "uncategorized",
+    description: transform.description || "",
+    canDecode: !!transform.reverse,
+    configurableOptions: transform.configurableOptions || []
+  };
+}
+
+function findTransform(idOrName) {
+  const needle = String(idOrName || "").toLowerCase();
+  for (const [key, transform] of Object.entries(transforms)) {
+    if (key.toLowerCase() === needle || String(transform.name || "").toLowerCase() === needle) {
+      return [key, transform];
+    }
+  }
+  throw new Error(`Unknown transform: ${idOrName}`);
+}
+
+if (action === "list") {
+  const category = payload.category ? String(payload.category).toLowerCase() : "";
+  let rows = Object.entries(transforms).map(([key, transform]) => summarize(key, transform));
+  if (category) rows = rows.filter((row) => row.category.toLowerCase() === category);
+  rows.sort((a, b) => (a.category + a.name).localeCompare(b.category + b.name));
+  console.log(JSON.stringify({ total: rows.length, transforms: rows }));
+} else if (action === "apply" || action === "decode") {
+  const [key, transform] = findTransform(payload.transform);
+  const options = payload.options || {};
+  const input = String(payload.text ?? "");
+  let output;
+  if (action === "decode") {
+    if (typeof transform.reverse !== "function") throw new Error(`${key} does not expose a decoder`);
+    output = transform.reverse(input, options);
+  } else {
+    output = transform.func(input, options);
+  }
+  console.log(JSON.stringify({ id: key, name: transform.name || key, output: String(output) }));
+} else {
+  throw new Error(`Unknown bridge action: ${action}`);
+}
+"""
+    try:
+        proc = subprocess.run(
+            ["node", "-e", script, str(bridge), action, json.dumps(payload)],
+            cwd=str(root),
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("Node.js is required for P4RS3LT0NGV3 transform bridge tools.") from exc
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout).strip())
+    return json.loads(proc.stdout)
+
+
+def _default_spelling_words() -> dict[str, str]:
+    return {
+        "A": "Atlas", "B": "Beacon", "C": "Cipher", "D": "Delta", "E": "Echo", "F": "Forge",
+        "G": "Glyph", "H": "Harbor", "I": "Ion", "J": "Jade", "K": "Keystone", "L": "Lumen",
+        "M": "Matrix", "N": "Nova", "O": "Oracle", "P": "Pulse", "Q": "Quartz", "R": "Relay",
+        "S": "Signal", "T": "Talon", "U": "Umbra", "V": "Vector", "W": "Waypoint",
+        "X": "Xenon", "Y": "Yield", "Z": "Zenith",
+    }
+
+
+def _load_spelling_alphabet(alphabet_json: str | None = None) -> dict[str, str]:
+    if not alphabet_json:
+        return _default_spelling_words()
+    data = json.loads(alphabet_json)
+    if not isinstance(data, dict):
+        raise ValueError("alphabet_json must be a JSON object mapping A-Z letters to words.")
+    alphabet = {}
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        value = data.get(letter) or data.get(letter.lower())
+        if not value:
+            raise ValueError(f"alphabet_json is missing letter {letter}.")
+        alphabet[letter] = str(value).strip()
+    return alphabet
+
+
+def _ean13_check_digit(first_12_digits: str) -> str:
+    total = sum(int(d) if i % 2 == 0 else int(d) * 3 for i, d in enumerate(first_12_digits))
+    return str((10 - total % 10) % 10)
 
 
 # ============================================================================
@@ -717,6 +855,220 @@ def encode_pig_latin(text: str) -> str:
     
     words = text.split()
     return ' '.join(convert_word(word) for word in words)
+
+
+# ============================================================================
+# P4RS3LT0NGV3 CONSUMER BRIDGE
+# ============================================================================
+
+@mcp.tool()
+def list_p4rs_transforms(category: str = "") -> str:
+    """
+    List transforms discovered from the local P4RS3LT0NGV3 transformer tree.
+
+    Args:
+        category: Optional category filter such as encoding, cipher, unicode, symbol, concealment.
+
+    Returns:
+        JSON with transform ids, display names, categories, decode support, and options.
+    """
+    return json.dumps(_run_p4rs_bridge("list", {"category": category}), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def apply_p4rs_transform(transform: str, text: str, options_json: str = "{}") -> str:
+    """
+    Apply any transform implemented by P4RS3LT0NGV3.
+
+    Args:
+        transform: Transform id (e.g. base91, fullwidth) or UI display name.
+        text: Input text.
+        options_json: Optional JSON object for transform-specific options.
+
+    Returns:
+        Transformed text.
+    """
+    options = json.loads(options_json or "{}")
+    result = _run_p4rs_bridge("apply", {"transform": transform, "text": text, "options": options})
+    return result["output"]
+
+
+@mcp.tool()
+def decode_p4rs_transform(transform: str, text: str, options_json: str = "{}") -> str:
+    """
+    Decode/reverse any reversible transform implemented by P4RS3LT0NGV3.
+
+    Args:
+        transform: Transform id (e.g. base91, fullwidth) or UI display name.
+        text: Encoded/transformed text.
+        options_json: Optional JSON object for transform-specific options.
+
+    Returns:
+        Decoded text.
+    """
+    options = json.loads(options_json or "{}")
+    result = _run_p4rs_bridge("decode", {"transform": transform, "text": text, "options": options})
+    return result["output"]
+
+
+@mcp.tool()
+def encode_spelling_alphabet(text: str, alphabet_json: str = "") -> str:
+    """
+    Encode text with a custom ICAO-style spelling alphabet.
+
+    Args:
+        text: Text to spell out.
+        alphabet_json: Optional JSON object mapping A-Z to words. If omitted, a built-in research alphabet is used.
+
+    Returns:
+        Words separated by spaces, preserving non-letter characters.
+    """
+    alphabet = _load_spelling_alphabet(alphabet_json or None)
+    output = []
+    for char in text:
+        upper = char.upper()
+        if upper in alphabet:
+            word = alphabet[upper]
+            output.append(word if char.isupper() else word.lower())
+        elif char.isspace():
+            output.append("/")
+        else:
+            output.append(char)
+    return " ".join(output)
+
+
+@mcp.tool()
+def decode_spelling_alphabet(text: str, alphabet_json: str = "") -> str:
+    """
+    Decode text created with a custom ICAO-style spelling alphabet.
+
+    Args:
+        text: Spelling alphabet words. Use / for spaces.
+        alphabet_json: Optional JSON object mapping A-Z to words. Must match the encoder alphabet.
+
+    Returns:
+        Decoded text.
+    """
+    alphabet = _load_spelling_alphabet(alphabet_json or None)
+    reverse = {word.lower(): letter for letter, word in alphabet.items()}
+    result = []
+    for token in re.split(r"(\s+)", text.strip()):
+        if not token or token.isspace():
+            continue
+        cleaned = token.strip()
+        if cleaned == "/":
+            result.append(" ")
+        else:
+            trailing = ""
+            while cleaned and cleaned[-1] in ".,!?;:":
+                trailing = cleaned[-1] + trailing
+                cleaned = cleaned[:-1]
+            result.append(reverse.get(cleaned.lower(), cleaned) + trailing)
+    return "".join(result)
+
+
+@mcp.tool()
+def generate_qr_code_svg(text: str, box_size: int = 10, border: int = 4) -> str:
+    """
+    Generate a QR code as SVG markup.
+
+    Args:
+        text: Data to encode.
+        box_size: Pixel size per QR module.
+        border: Quiet-zone border size in modules.
+
+    Returns:
+        SVG markup for the QR code.
+    """
+    import qrcode
+    import qrcode.image.svg
+
+    if not text:
+        raise ValueError("text is required")
+    factory = qrcode.image.svg.SvgImage
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=max(1, min(40, int(box_size))),
+        border=max(0, min(20, int(border))),
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    image = qr.make_image(image_factory=factory)
+    return image.to_string(encoding="unicode")
+
+
+@mcp.tool()
+def generate_qr_code_data_uri(text: str, box_size: int = 10, border: int = 4) -> str:
+    """
+    Generate a QR code as a PNG data URI.
+
+    Args:
+        text: Data to encode.
+        box_size: Pixel size per QR module.
+        border: Quiet-zone border size in modules.
+
+    Returns:
+        data:image/png;base64 URI.
+    """
+    import io
+    import qrcode
+
+    if not text:
+        raise ValueError("text is required")
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=max(1, min(40, int(box_size))),
+        border=max(0, min(20, int(border))),
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+@mcp.tool()
+def generate_barcode_svg(text: str, format: str = "code128", show_text: bool = True) -> str:
+    """
+    Generate a barcode as SVG markup.
+
+    Args:
+        text: Data to encode.
+        format: code128, code39, or ean13.
+        show_text: Whether to include readable text below the bars.
+
+    Returns:
+        SVG markup for the barcode.
+    """
+    import barcode
+    from barcode.writer import SVGWriter
+
+    if not text:
+        raise ValueError("text is required")
+    normalized = format.lower().replace("-", "")
+    supported = {"code128": "code128", "code39": "code39", "ean13": "ean13"}
+    if normalized not in supported:
+        raise ValueError("format must be one of: code128, code39, ean13")
+    value = str(text)
+    if normalized == "code39":
+        value = value.upper()
+        if not re.fullmatch(r"[0-9A-Z \-.$/+%]+", value):
+            raise ValueError("Code 39 supports A-Z, 0-9, space, and - . $ / + %.")
+    if normalized == "ean13":
+        digits = re.sub(r"\D", "", value)
+        if len(digits) == 12:
+            digits += _ean13_check_digit(digits)
+        if len(digits) != 13:
+            raise ValueError("EAN-13 requires 12 or 13 digits.")
+        value = digits
+    cls = barcode.get_barcode_class(supported[normalized])
+    code = cls(value, writer=SVGWriter())
+    with tempfile.NamedTemporaryFile(suffix=".svg") as tmp:
+        written = code.save(tmp.name[:-4], options={"write_text": bool(show_text)})
+        return Path(written).read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
