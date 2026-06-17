@@ -10,6 +10,9 @@ dependencies = [
     "pybase62>=1.0.0",
     "httpx>=0.28.1",
     "mcp[cli]>=1.16.0",
+    "pillow>=10.0.0",
+    "python-barcode>=0.15.1",
+    "qrcode[pil]>=8.0",
 ]
 
 [project.scripts]

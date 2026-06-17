@@ -4,6 +4,8 @@ Comprehensive tests for all Parseltongue encodings with assertions.
 Run: uv run python test_encodings.py
 """
 
+import json
+
 from main import (
     # Basic Encodings
     encode_base64, decode_base64,
@@ -35,6 +37,10 @@ from main import (
     # Utilities
     reverse_text,
     encode_pig_latin,
+    # P4RS3LT0NGV3 consumer bridge
+    list_p4rs_transforms, apply_p4rs_transform, decode_p4rs_transform,
+    encode_spelling_alphabet, decode_spelling_alphabet,
+    generate_qr_code_svg, generate_qr_code_data_uri, generate_barcode_svg,
 )
 
 
@@ -492,6 +498,50 @@ def test_pig_latin():
     print("✓ Pig Latin tests passed")
 
 
+def test_p4rs_bridge():
+    """Test generic P4RS3LT0NGV3 transform bridge"""
+    print("Testing P4RS3LT0NGV3 bridge...")
+    catalog = list_p4rs_transforms()
+    parsed_catalog = json.loads(catalog)
+    assert parsed_catalog["total"] >= 220, f"Expected current P4RS catalog, got {parsed_catalog['total']} transforms"
+    assert '"transforms"' in catalog, "P4RS transform catalog missing transforms key"
+    assert "base64" in catalog.lower(), "P4RS transform catalog did not include base64"
+
+    encoded = apply_p4rs_transform("base64", "Hello bridge")
+    decoded = decode_p4rs_transform("base64", encoded)
+    assert decoded == "Hello bridge", f"P4RS base64 round-trip failed: {decoded}"
+
+    fullwidth = apply_p4rs_transform("fullwidth", "ABC123")
+    assert fullwidth != "ABC123", "P4RS fullwidth transform did not change input"
+
+    print("✓ P4RS3LT0NGV3 bridge tests passed")
+
+
+def test_spelling_alphabet():
+    """Test custom spelling alphabet helpers"""
+    print("Testing Custom Spelling Alphabet...")
+    alphabet = '{"A":"Alpha","B":"Bravo","C":"Charlie","D":"Delta","E":"Echo","F":"Foxtrot","G":"Golf","H":"Hotel","I":"India","J":"Juliet","K":"Kilo","L":"Lima","M":"Mike","N":"November","O":"Oscar","P":"Papa","Q":"Quebec","R":"Romeo","S":"Sierra","T":"Tango","U":"Uniform","V":"Victor","W":"Whiskey","X":"Xray","Y":"Yankee","Z":"Zulu"}'
+    encoded = encode_spelling_alphabet("CAB", alphabet)
+    assert encoded == "Charlie Alpha Bravo", f"Unexpected alphabet encoding: {encoded}"
+    decoded = decode_spelling_alphabet(encoded, alphabet)
+    assert decoded == "CAB", f"Unexpected alphabet decoding: {decoded}"
+
+    print("✓ Custom Spelling Alphabet tests passed")
+
+
+def test_codes():
+    """Test QR and barcode generation helpers"""
+    print("Testing QR Codes & Barcodes...")
+    qr_svg = generate_qr_code_svg("https://example.test/p4rs")
+    assert "<svg" in qr_svg and "</svg>" in qr_svg, "QR SVG generation failed"
+    qr_data_uri = generate_qr_code_data_uri("https://example.test/p4rs")
+    assert qr_data_uri.startswith("data:image/png;base64,"), "QR data URI generation failed"
+    barcode_svg = generate_barcode_svg("P4RS123", "code128")
+    assert "<svg" in barcode_svg and "</svg>" in barcode_svg, "Barcode SVG generation failed"
+
+    print("✓ QR Codes & Barcodes tests passed")
+
+
 def run_all_tests():
     """Run all encoding tests"""
     print("\n" + "=" * 70)
@@ -537,6 +587,12 @@ def run_all_tests():
     print("\n--- UTILITIES ---")
     test_reverse_text()
     test_pig_latin()
+
+    # Current P4RS3LT0NGV3 consumer features
+    print("\n--- P4RS3LT0NGV3 CONSUMER FEATURES ---")
+    test_p4rs_bridge()
+    test_spelling_alphabet()
+    test_codes()
     
     print("\n" + "=" * 70)
     print("✓ ALL TESTS PASSED SUCCESSFULLY!")
@@ -545,4 +601,3 @@ def run_all_tests():
 
 if __name__ == "__main__":
     run_all_tests()
-
